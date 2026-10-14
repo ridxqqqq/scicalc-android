@@ -1,0 +1,15 @@
+# ---- 构建产物（可由 build.ps1 完全重建）----
+build/
+*.log
+
+# ---- 签名密钥：包含私钥，绝对不能提交 ----
+# build.ps1 在检测到 release.keystore 缺失时会自动用 keytool 重新生成一份。
+*.keystore
+*.jks
+
+# ---- IDE / 操作系统 ----
+.idea/
+.vscode/
+*.iml
+Thumbs.db
+desktop.ini
