@@ -271,7 +271,7 @@ Number of signers: 1
 ## 8. 复现步骤
 
 ```powershell
-git clone <repo-url> D:\android_1
+git clone https://github.com/ridxqqqq/scicalc-android.git D:\android_1
 cd D:\android_1
 
 # 首次构建会自动生成一份新的 release.keystore

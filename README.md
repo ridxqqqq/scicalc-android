@@ -109,6 +109,10 @@ adb install -r D:\android_1\build\ScienceCalculator-v1.0.apk
 - `$ErrorActionPreference` 设为 `Continue`，因为 PS 5.1 会把 keytool/apksigner 写到 stderr 的
   正常提示当成 `NativeCommandError`；脚本改为在每个原生调用后显式检查 `$LASTEXITCODE` 并 `throw`。
 
+## 仓库
+
+<https://github.com/ridxqqqq/scicalc-android>（私有）
+
 ## 开发过程记录
 
 完整的过程记录 —— 文法设计、9 步构建链细节、**6 个踩坑与修复**、验证结果、
