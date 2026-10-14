@@ -6,6 +6,7 @@ import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.StateListDrawable;
 import android.os.Bundle;
+import android.text.TextUtils;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
@@ -15,9 +16,12 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.math.MathContext;
 import java.text.DecimalFormat;
 import java.text.DecimalFormatSymbols;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 
 /**
@@ -37,6 +41,7 @@ public class MainActivity extends Activity {
     private static final int COL_SUB     = 0xFF8FA3B0;
     private static final int COL_OK      = 0xFF26A69A;
     private static final int COL_ERR     = 0xFFFF7043;
+    private static final int COL_ROW_ON  = 0xFF20303F;   // 进制模式当前编辑行的底色
 
     private static final int MATCH = ViewGroup.LayoutParams.MATCH_PARENT;
     private static final int WRAP  = ViewGroup.LayoutParams.WRAP_CONTENT;
@@ -56,11 +61,27 @@ public class MainActivity extends Activity {
     private boolean justEvaluated = false;
     private String lastText = "";
 
+    // ---- 模式切换 ----
+    private LinearLayout calcPanel;
+    private LinearLayout convPanel;
+    private Button modeCalcBtn;
+    private Button modeConvBtn;
+
+    // ---- 进制转换面板 ----
+    private LinearLayout[] convRows;
+    private TextView[] convValues;
+    private TextView convHintView;
+    private final List<Button> convKeys = new ArrayList<Button>();
+
+    private final StringBuilder convInput = new StringBuilder();
+    private int convBase = BaseConv.DEC;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(buildUi());
         refresh();
+        refreshConv();
     }
 
     // ------------------------------------------------------------------ 界面
@@ -71,6 +92,24 @@ public class MainActivity extends Activity {
         root.setBackgroundColor(COL_BG);
         root.setPadding(dp(6), dp(6), dp(6), dp(6));
 
+        root.addView(buildModeBar(), new LinearLayout.LayoutParams(MATCH, WRAP));
+
+        calcPanel = new LinearLayout(this);
+        calcPanel.setOrientation(LinearLayout.VERTICAL);
+        buildCalcPanel(calcPanel);
+        root.addView(calcPanel, new LinearLayout.LayoutParams(MATCH, 0, 1f));
+
+        convPanel = new LinearLayout(this);
+        convPanel.setOrientation(LinearLayout.VERTICAL);
+        buildConvPanel(convPanel);
+        root.addView(convPanel, new LinearLayout.LayoutParams(MATCH, 0, 1f));
+
+        setMode(true);
+        return root;
+    }
+
+    /** 计算模式面板：显示屏 + 8 行键盘（原 buildUi 的主体）。 */
+    private void buildCalcPanel(LinearLayout root) {
         // ---- 显示屏 ----
         LinearLayout disp = new LinearLayout(this);
         disp.setOrientation(LinearLayout.VERTICAL);
@@ -140,8 +179,283 @@ public class MainActivity extends Activity {
                 new int[]{COL_EQ}));
 
         root.addView(pad, new LinearLayout.LayoutParams(MATCH, 0, 3.0f));
-        return root;
     }
+    // ------------------------------------------------------------------ 模式切换
+
+    /** 顶部「计算 / 进制」切换条。 */
+    private View buildModeBar() {
+        LinearLayout bar = new LinearLayout(this);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+
+        modeCalcBtn = makeModeButton("计算");
+        modeConvBtn = makeModeButton("进制");
+
+        modeCalcBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                setMode(true);
+            }
+        });
+        modeConvBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                setMode(false);
+            }
+        });
+
+        LinearLayout.LayoutParams l1 = new LinearLayout.LayoutParams(0, dp(42), 1f);
+        l1.setMargins(dp(3), dp(3), dp(3), dp(3));
+        LinearLayout.LayoutParams l2 = new LinearLayout.LayoutParams(0, dp(42), 1f);
+        l2.setMargins(dp(3), dp(3), dp(3), dp(3));
+        bar.addView(modeCalcBtn, l1);
+        bar.addView(modeConvBtn, l2);
+        return bar;
+    }
+
+    private Button makeModeButton(String label) {
+        Button b = new Button(this);
+        b.setText(label);
+        b.setAllCaps(false);
+        b.setTextColor(COL_TEXT);
+        b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        b.setPadding(0, 0, 0, 0);
+        b.setMinWidth(0);
+        b.setMinimumWidth(0);
+        b.setMinHeight(0);
+        b.setMinimumHeight(0);
+        b.setBackground(selectedBg(COL_OP));
+        return b;
+    }
+
+    /** 三态背景：按下 > 选中 > 普通。选中态用来高亮当前模式。 */
+    private Drawable selectedBg(int color) {
+        StateListDrawable s = new StateListDrawable();
+        s.addState(new int[]{android.R.attr.state_pressed}, rounded(lighten(color, 0.24f), 12));
+        s.addState(new int[]{android.R.attr.state_selected}, rounded(color, 12));
+        s.addState(new int[]{}, rounded(COL_NUM, 12));
+        return s;
+    }
+
+    private void setMode(boolean calc) {
+        if (calcPanel == null || convPanel == null) return;
+        calcPanel.setVisibility(calc ? View.VISIBLE : View.GONE);
+        convPanel.setVisibility(calc ? View.GONE : View.VISIBLE);
+        if (modeCalcBtn != null) modeCalcBtn.setSelected(calc);
+        if (modeConvBtn != null) modeConvBtn.setSelected(!calc);
+    }
+
+    /** 进制模式下按返回键 -> 先回到计算模式，而不是直接退出应用。 */
+    @Override
+    public void onBackPressed() {
+        if (convPanel != null && convPanel.getVisibility() == View.VISIBLE) {
+            setMode(true);
+            return;
+        }
+        super.onBackPressed();
+    }
+
+    // ------------------------------------------------------------------ 进制转换面板
+
+    /** 进制模式：4 行进制度量 + 提示行 + 16 进制键盘。 */
+    private void buildConvPanel(LinearLayout root) {
+        LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        list.setGravity(Gravity.CENTER_VERTICAL);
+        list.setBackground(rounded(COL_DISPLAY, 16));
+        list.setPadding(dp(8), dp(8), dp(8), dp(8));
+
+        convRows = new LinearLayout[BaseConv.BASES.length];
+        convValues = new TextView[BaseConv.BASES.length];
+
+        for (int i = 0; i < BaseConv.BASES.length; i++) {
+            final int base = BaseConv.BASES[i];
+
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding(dp(10), dp(10), dp(10), dp(10));
+
+            TextView tag = new TextView(this);
+            tag.setText(BaseConv.NAMES[i]);
+            tag.setTextColor(COL_SUB);
+            tag.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+
+            TextView val = new TextView(this);
+            val.setTextColor(COL_TEXT);
+            val.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17);
+            val.setGravity(Gravity.END);
+            val.setMaxLines(3);
+            val.setEllipsize(TextUtils.TruncateAt.END);
+
+            row.addView(tag, new LinearLayout.LayoutParams(dp(46), WRAP));
+            row.addView(val, new LinearLayout.LayoutParams(0, WRAP, 1f));
+
+            row.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    selectConvBase(base);
+                }
+            });
+
+            list.addView(row, new LinearLayout.LayoutParams(MATCH, WRAP));
+            convRows[i] = row;
+            convValues[i] = val;
+        }
+        root.addView(list, new LinearLayout.LayoutParams(MATCH, 0, 1f));
+
+        convHintView = new TextView(this);
+        convHintView.setTextColor(COL_SUB);
+        convHintView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        convHintView.setPadding(dp(10), dp(6), dp(10), dp(6));
+        root.addView(convHintView, new LinearLayout.LayoutParams(MATCH, WRAP));
+
+        root.addView(buildConvPad(), new LinearLayout.LayoutParams(MATCH, WRAP));
+    }
+
+    /** 16 进制键盘；当前进制用不到的数字键会在 refreshConv() 里被灰掉。 */
+    private View buildConvPad() {
+        LinearLayout pad = new LinearLayout(this);
+        pad.setOrientation(LinearLayout.VERTICAL);
+        pad.setPadding(0, dp(4), 0, 0);
+
+        pad.addView(convRow(new String[]{"7", "8", "9", "A", "B"},
+                new int[]{COL_NUM, COL_NUM, COL_NUM, COL_FUNC, COL_FUNC}));
+        pad.addView(convRow(new String[]{"4", "5", "6", "C", "D"},
+                new int[]{COL_NUM, COL_NUM, COL_NUM, COL_FUNC, COL_FUNC}));
+        pad.addView(convRow(new String[]{"1", "2", "3", "E", "F"},
+                new int[]{COL_NUM, COL_NUM, COL_NUM, COL_FUNC, COL_FUNC}));
+        pad.addView(convRow(new String[]{"±", "0", "DEL", "清空"},
+                new int[]{COL_FUNC, COL_NUM, COL_CLEAR, COL_CLEAR}));
+
+        // 键盘整体固定高度，把富余空间留给上面的 4 行进制度量
+        for (int i = 0; i < pad.getChildCount(); i++) {
+            pad.getChildAt(i).setLayoutParams(new LinearLayout.LayoutParams(MATCH, dp(52)));
+        }
+        return pad;
+    }
+
+    /** 一行进制键盘；数字键 action = "cv:d:<字符>"，用于回填与灰化判定。 */
+    private View convRow(String[] labels, int[] colors) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        for (int i = 0; i < labels.length; i++) {
+            String lab = labels[i];
+            String action;
+            if ("±".equals(lab))            action = "cv:sign";
+            else if ("DEL".equals(lab))     action = "cv:back";
+            else if ("清空".equals(lab))    action = "cv:clear";
+            else                            action = "cv:d:" + lab;
+
+            Button b = makeButton(lab, action, colors[i]);
+            if (action.startsWith("cv:d:")) {
+                b.setTag(Character.valueOf(lab.charAt(0)));
+                convKeys.add(b);
+            }
+            row.addView(b);
+        }
+        return row;
+    }
+
+    private void onConvAction(String a) {
+        if (a.startsWith("cv:d:")) {
+            char c = a.charAt(5);
+            if (!BaseConv.isValidDigit(c, convBase)) return;
+            if (convInput.length() >= BaseConv.MAX_LEN) return;
+            convInput.append(c);
+        } else if (a.equals("cv:sign")) {
+            if (convInput.length() > 0 && convInput.charAt(0) == '-') {
+                convInput.deleteCharAt(0);
+            } else {
+                convInput.insert(0, '-');
+            }
+        } else if (a.equals("cv:back")) {
+            if (convInput.length() > 0) {
+                convInput.deleteCharAt(convInput.length() - 1);
+            }
+        } else if (a.equals("cv:clear")) {
+            convInput.setLength(0);
+        }
+        refreshConv();
+    }
+
+    /** 切换输入进制：把当前输入换算成新进制的写法，数值本身不变。 */
+    private void selectConvBase(int base) {
+        if (base == convBase) return;
+        String cur = convInput.toString();
+        if (cur.length() > 0) {
+            try {
+                BigInteger v = BaseConv.parse(cur, convBase);
+                convInput.setLength(0);
+                convInput.append(BaseConv.format(v, base));
+            } catch (IllegalArgumentException e) {
+                convInput.setLength(0);          // 例如只按了 ± 还没输入数字
+            }
+        }
+        convBase = base;
+        refreshConv();
+    }
+
+    private void refreshConv() {
+        if (convValues == null) return;
+
+        String raw = convInput.toString();
+        BigInteger value = null;
+        String err = "";
+        if (raw.length() > 0 && !"-".equals(raw)) {
+            try {
+                value = BaseConv.parse(raw, convBase);
+            } catch (IllegalArgumentException e) {
+                err = e.getMessage();
+            }
+        }
+
+        for (int i = 0; i < BaseConv.BASES.length; i++) {
+            int base = BaseConv.BASES[i];
+            boolean editing = (base == convBase);
+            String text;
+            if (raw.length() == 0) {
+                text = "0";
+            } else if (editing) {
+                text = raw;                      // 正在编辑的那一行原样显示输入
+            } else if (value != null) {
+                text = BaseConv.display(value, base);
+            } else {
+                text = "—";
+            }
+            convValues[i].setText(text);
+            convValues[i].setTextColor(editing ? COL_OK : COL_TEXT);
+            convRows[i].setBackground(editing ? rounded(COL_ROW_ON, 10) : null);
+        }
+
+        // 当前进制下用不到的数字键灰掉
+        for (int i = 0; i < convKeys.size(); i++) {
+            Button b = convKeys.get(i);
+            Object tag = b.getTag();
+            boolean usable = true;
+            if (tag instanceof Character) {
+                usable = BaseConv.isValidDigit(((Character) tag).charValue(), convBase);
+            }
+            b.setEnabled(usable);
+            b.setAlpha(usable ? 1f : 0.28f);
+        }
+
+        if (convHintView == null) return;
+        if (err.length() > 0) {
+            convHintView.setTextColor(COL_ERR);
+            convHintView.setText(err);
+            return;
+        }
+        convHintView.setTextColor(COL_SUB);
+        int idx = BaseConv.indexOf(convBase);
+        String name = (idx >= 0) ? BaseConv.NAMES[idx] : String.valueOf(convBase);
+        if (value == null) {
+            convHintView.setText("输入 " + name + " 进制的整数 ｜ 点击任意一行可切换输入进制");
+        } else {
+            convHintView.setText("输入 " + name + " ｜ 位数 " + BaseConv.bitLength(value)
+                    + " 位 ｜ 仅支持整数");
+        }
+    }
+
     private View makeRow(String[] labels, String[] actions, int[] colors) {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
@@ -208,6 +522,11 @@ public class MainActivity extends Activity {
 
     private void onAction(String a) {
         if (a == null) return;
+
+        if (a.startsWith("cv:")) {          // 进制模式键盘
+            onConvAction(a);
+            return;
+        }
 
         if (a.startsWith("ins:")) {
             String t = a.substring(4);

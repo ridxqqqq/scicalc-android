@@ -37,17 +37,19 @@ D:\android_1\
 ├─ AndroidManifest.xml
 ├─ build.ps1                        一键构建脚本（9 步）
 ├─ release.keystore                 签名密钥（已 gitignore，缺失时自动生成）
-├─ ScienceCalculator-v1.0.apk       成品 APK
+├─ ScienceCalculator-v1.1.apk       成品 APK
 ├─ java\com\scicalc\calculator\
 │   ├─ Calc.java                    表达式求值器（递归下降解析）
-│   └─ MainActivity.java            界面 + 交互逻辑
+│   ├─ BaseConv.java                进制转换（2/8/10/16 整数互转）
+│   └─ MainActivity.java            界面 + 交互逻辑（计算 / 进制两种模式）
 ├─ res\
 │   ├─ values\strings.xml           应用名：科学计算器
 │   ├─ values\styles.xml            深色主题
 │   └─ mipmap-{m,h,xh,xxh,xxxh}dpi\ic_launcher.png
 ├─ tools\
 │   ├─ gen_icon.py                  纯标准库 PNG 图标生成器
-│   └─ CalcTest.java                Calc 的独立单元测试（纯 Java，可脱离 Android 运行）
+│   ├─ CalcTest.java                Calc 的独立单元测试（纯 Java，可脱离 Android 运行）
+│   └─ BaseConvTest.java            BaseConv 的独立单元测试（纯 Java，可脱离 Android 运行）
 └─ build\                           中间产物（已 gitignore）
 ```
 
@@ -195,7 +197,9 @@ APK 里的字符串本身是对的。用 Python 以 `utf-8` 解码同一命令�
 
 ## 6. 验证结果
 
-### 6.1 单元测试：25 / 25 通过
+### 6.1 单元测试：25 / 25 通过（v1.0）
+
+> v1.1 追加了 `BaseConvTest`，两套测试的最新结果见 §7.5。
 
 `tools/CalcTest.java` 是**纯 Java** 的，不需要 Android 运行时：
 
@@ -257,7 +261,123 @@ Number of signers: 1
 
 ---
 
-## 7. 已知限制
+## 7. v1.1 增量：进制转换
+
+### 7.1 需求
+
+在已完成的科学计算器基础上，增加 **二进制 / 八进制 / 十进制 / 十六进制** 的互相转换，
+更新版本号后重新打包发布。
+
+### 7.2 为什么单独写一个 `BaseConv`
+
+`Calc.java` 是 `double` 浮点表达式求值器，**不能**直接拿来算进制转换：
+
+- `double` 只有 53 位有效二进制位，`FFFFFFFFFFFFFFFF` 这种 64 位值会直接丢精度；
+- 十六进制的 `E` 与科学计数法的指数符号冲突，硬塞进同一个词法分析器只会互相打架。
+
+所以新开一个 `BaseConv.java`，只依赖 `java.math.BigInteger`，**完全不引用任何 Android API**。
+好处是它能像 `CalcTest` 一样用普通 `javac/java` 直接跑单测，不用起模拟器。
+
+对外只暴露几个语义清晰的入口：
+
+| 方法 | 作用 |
+| --- | --- |
+| `parse(String, int)` | 按指定进制解析成 `BigInteger`，非法输入抛 `IllegalArgumentException` |
+| `format(BigInteger, int)` | 整数转成指定进制字符串（大写、无前缀、负数带 `-`） |
+| `convert(String, int, int)` | `parse` + `format` 的便捷组合 |
+| `display(BigInteger, int)` | 界面展示用：二进制每 4 位、八进制每 3 位、十六进制每 4 位插空格 |
+| `isValidDigit(char, int)` | 单字符判定，键盘灰化直接用它 |
+
+### 7.3 界面改造：从单模式到双模式
+
+原 `buildUi()` 一次性把「显示屏 + 8 行键盘」挂到 root 上。改造后：
+
+```
+root
+ ├─ buildModeBar()          [计算] [进制]        ← 新增
+ ├─ calcPanel  (weight 1)   原显示屏 + 8 行键盘，整体搬进 buildCalcPanel()
+ └─ convPanel  (weight 1)   新增的进制面板
+```
+
+切换只是两个面板的 `setVisibility(VISIBLE / GONE)`，`setMode()` 里顺带把当前模式的按钮
+`setSelected(true)`，配合一个三态 `StateListDrawable`（按下 / 选中 / 普通）做高亮。
+
+进制面板本身：
+
+```
+┌────────────────────────────────────┐
+│ BIN   1111 1111                    │  ← 点任意一行 = 把输入进制切到那一行
+│ OCT   377                          │     当前编辑行高亮、数值用青色
+│ DEC   255                          │     非编辑行显示换算结果
+│ HEX   FF                           │
+│ 输入 DEC ｜ 位数 8 位 ｜ 仅支持整数   │  ← 提示行
+├────────────────────────────────────┤
+│ 7  8  9  A  B                      │
+│ 4  5  6  C  D                      │  ← 当前进制用不到的键变暗且禁用
+│ 1  2  3  E  F                      │
+│ ±  0  DEL  清空                     │
+└────────────────────────────────────┘
+```
+
+几个设计取舍：
+
+- **点行切换进制时按数值换算，而不是按字面搬运**。十进制 `255` 点 HEX 行后变成 `FF`，
+  数值 255 不变 —— 这才符合「同一个数的不同写法」这个心理模型。
+- **键盘保留完整的 0–9 / A–F**，只把当前进制用不到的键 `setEnabled(false)` + `setAlpha(0.28f)`。
+  不做动态重排：键位固定肌肉记忆更稳，灰色也直观地告诉你「这些数字在这个进制里不存在」。
+- **键盘行高写死 52dp、上面 4 行进制度量行吃掉剩余权重**，这样切换屏幕比例时长数字区始终有空间。
+- **清空键用中文而不用 `C`**：十六进制里 `C` 本身就是合法数字，按钮再叫 `C` 会歧义。
+- **返回键先退回计算模式**而不是退出应用（重写 `onBackPressed()`）。
+- 单一数字键的 action 编码成 `cv:d:<字符>`，按钮同时把字符塞进 `setTag()`，
+  `refreshConv()` 遍历这些按钮按当前进制统一灰化。
+
+### 7.4 版本号与产物
+
+| | v1.0 | v1.1 |
+| --- | --- | --- |
+| `AndroidManifest.xml` | `versionCode="1"` / `versionName="1.0"` | `versionCode="2"` / `versionName="1.1"` |
+| `build.ps1` 的 `$ver` | `1.0` | `1.1` |
+| 产物 | `ScienceCalculator-v1.0.apk` | `ScienceCalculator-v1.1.apk` |
+
+`versionCode` 必须递增（1 → 2），否则 `adb install -r` 覆盖安装会被系统拒绝。
+`release.keystore` 复用、不重新生成，签名指纹保持一致，老版本可以原地升级。
+
+### 7.5 测试：BaseConvTest 73 / 73
+
+新增 `tools/BaseConvTest.java`，与 `CalcTest` 同样是纯 Java、可脱离 Android 运行：
+
+```powershell
+javac -encoding UTF-8 -d build\testout -sourcepath java tools\CalcTest.java tools\BaseConvTest.java
+java -cp build\testout com.scicalc.calculator.BaseConvTest
+```
+
+| 类别 | 用例 |
+| --- | --- |
+| 四进制两两互转 | 12 组（`255` ↔ `FF` / `11111111` / `377` 等） |
+| 同进制恒等 | `255`→`255`、`0` |
+| 负数 | `-255`→`-FF`、`-FF`→`-255`、`-1010`(BIN)→`-10` |
+| 书写宽容度 | 小写 `ff`、前后空白、`+1010`、前导零 `00001111` |
+| 位宽边界 | `FFFFFFFF`→4294967295、`7FFFFFFF`→2147483647 |
+| 超出 `long` | `FFFFFFFFFFFFFFFF`→18446744073709551615（必须 BigInteger） |
+| 往返一致性 | 依次经 2/8/10/16 再转回原进制，5 组 |
+| 非法输入 | 12 类（空串、只有符号、二进制里的 `2`、八进制里的 `8/9`、`G`、`1F`、`1 0`、`1.5`、`0x1F` …） |
+| 字符集 / 过滤 / 分组 / 位数 | `digitsOf`、`filter`、`group`、`display`、`bitLength` 共 24 项 |
+
+结果：**73 项全部通过**；原有 `CalcTest` 依旧 **25 项全部通过**。
+
+### 7.6 版本对比
+
+| 项 | v1.0 | v1.1 |
+| --- | --- | --- |
+| 大小 | 33,575 字节 | 37,671 字节 |
+| MD5 | `0cbc6e2ffe2a97c06e4db3747335c89b` | `5bac4fe4a9c92ba6c9869301e43c95c8` |
+| 新增文件 | — | `BaseConv.java`、`BaseConvTest.java` |
+| 清单校验 | versionCode 1 / versionName 1.0 | versionCode 2 / versionName 1.1 |
+| 签名 | 复用同一 `release.keystore`，可覆盖升级 | 同左 |
+
+---
+
+## 8. 已知限制
 
 - 计算基于 `double` 双精度，显示最多保留 10 位小数，`sin(30)` 这类值实际是
   `0.49999999999999994`，回填时按 12 位有效数字四舍五入为 `0.5`。
@@ -265,10 +385,14 @@ Number of signers: 1
   在 `Calc.apply` 加分支即可，UI 上再补按钮。
 - 只做了竖屏单手布局，横屏/平板未做适配（清单里锁定 portrait）。
 - 无历史记录、无内存变量（M+/MR）功能。
+- 进制转换**只支持整数**：小数点会被判为非法字符（`1.5` 报错），不提供小数部分的进制展开。
+- 进制转换的负数按「符号 + 绝对值」显示（`-FF`），不提供补码视图，
+  也没有 8/16/32/64 位按位宽截断 / 掩码功能。
+- 计算模式与进制模式各自维护输入缓冲，两边的结果不会互相带回。
 
 ---
 
-## 8. 复现步骤
+## 9. 复现步骤
 
 ```powershell
 git clone https://github.com/ridxqqqq/scicalc-android.git D:\android_1
@@ -278,12 +402,13 @@ cd D:\android_1
 Set-ExecutionPolicy -Scope Process Bypass -Force
 .\build.ps1
 
-# 运行单元测试
-javac -encoding UTF-8 -d build\testout -sourcepath java tools\CalcTest.java
+# 运行单元测试（两套，都是纯 Java）
+javac -encoding UTF-8 -d build\testout -sourcepath java tools\CalcTest.java tools\BaseConvTest.java
 java -cp build\testout com.scicalc.calculator.CalcTest
+java -cp build\testout com.scicalc.calculator.BaseConvTest
 
 # 安装到设备
-adb install -r .\build\ScienceCalculator-v1.0.apk
+adb install -r .\build\ScienceCalculator-v1.1.apk
 ```
 
 > `release.keystore` 被 `.gitignore` 排除（含私钥，不应入库）。

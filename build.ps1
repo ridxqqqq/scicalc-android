@@ -16,7 +16,7 @@ $pkg   = "com\scicalc\calculator"
 $pkgDot= "com.scicalc.calculator"
 $build = Join-Path $proj "build"
 $ks    = Join-Path $proj "release.keystore"
-$ver   = "1.0"
+$ver   = "1.1"
 $apk   = Join-Path $build ("ScienceCalculator-v" + $ver + ".apk")
 
 foreach ($tool in @(
