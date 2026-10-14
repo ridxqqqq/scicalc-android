@@ -111,7 +111,7 @@ adb install -r D:\android_1\build\ScienceCalculator-v1.0.apk
 
 ## 仓库
 
-<https://github.com/ridxqqqq/scicalc-android>（私有）
+<https://github.com/ridxqqqq/scicalc-android>
 
 ## 开发过程记录
 
